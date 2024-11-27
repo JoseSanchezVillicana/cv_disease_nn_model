@@ -1,0 +1,983 @@
+---
+title: "Proyecto Final: Procesamiento de datos"
+subtitle: "Licenciatura en Ciencias Genómicas, Ciencia de Datos"
+author:
+- José Antonio Sánchez Villicaña
+- Bernardo Chombo Álvarez
+date: last-modified
+format:
+  html:
+    toc: true
+    theme: flatly
+    highlight-style: tango
+    code-fold: false
+    code-overflow: scroll
+    code-block-border-left: true
+    page-layout: article
+    fig-align: center
+    df-print: paged
+execute: 
+  eval: true
+  echo: true
+  warning: false
+  include: true
+  error: false
+  message: false
+fontsize: 11pt
+editor: visual
+mainfont: Calibri
+sansfont: Calibri
+monofont: Calibri
+knitr:
+  opts_chunk:
+    comment: "##"
+  opts_knit:
+    kable: true
+---
+
+# Procesamiento del dataset "Cardiovascular Disease"
+
+This Notebook aims to explain all the steps done by us for cleaning and transforming the data from the `cardiovascular_disease.csv` file. This dataset consists of 70,000 patient data points. Below is the information for each attribute:
+
+1.  **Age** \| Objective Feature \| `age` \| *int (days)*
+2.  **Height** \| Objective Feature \| `height` \| *int (cm)*
+3.  **Weight** \| Objective Feature \| `weight` \| *float (kg)*
+    -   1: woman
+    -   2: man
+4.  **Gender** \| Objective Feature \| `gender` \| *categorical code*
+5.  **Systolic blood pressure** \| Examination Feature \| `ap_hi` \| *int*
+6.  **Diastolic blood pressure** \| Examination Feature \| `ap_lo` \| *int*
+7.  **Cholesterol** \| Examination Feature \| `cholesterol` \|
+    -   1: normal
+    -   2: above normal
+    -   3: well above normal
+8.  **Glucose** \| Examination Feature \| `gluc` \|
+    -   1: normal
+    -   2: above normal
+    -   3: well above normal
+9.  **Smoking** \| Subjective Feature \| `smoke` \| *binary*
+10. **Alcohol intake** \| Subjective Feature \| `alco` \| *binary*
+11. **Physical activity** \| Subjective Feature \| `active` \| *binary*
+12. **Presence or absence of cardiovascular disease** \| Target Variable \| `cardio` \| *binary*
+
+## 1. Setup Workspace
+
+### 1.1 Load libraries
+
+```{r}
+## Install remotes
+if (!requireNamespace("remotes", quietly = TRUE)) {
+    install.packages("remotes")
+}
+
+## Install the needed libs
+libs <- c("dplyr","ggplot2","e1071","bestNormalize","fitdistrplus","dslabs","factoextra","reshape2","Rtsne","umap","GGally","ggpubr")
+for (lib in libs) {
+    if (!requireNamespace(lib, quietly = TRUE)) {
+        install.packages(lib)
+    }
+}
+
+library(dplyr)
+library(ggplot2)
+library(e1071)
+library(bestNormalize)
+library(fitdistrplus)
+library(dslabs)
+library(factoextra)
+library(reshape2)
+library(Rtsne)
+library(umap)
+library(GGally)
+library(ggpubr)
+```
+
+### 1.2 Create useful methods
+
+#### 1.2.1 Plot histogram
+
+```{r}
+## Foo for histogram plotting
+plothistogram <- function(df,xcolumn,plot_title="Barplot",x_lab="Var1",y_lab="Freq",colvec=rainbow(n = 10),legendlabels=NULL,legendtitle=NULL,fillcol=NULL,groupcol=NULL,nbins=100,density=FALSE,showlegend=TRUE,addmean=FALSE,addmedian=FALSE,save_img=FALSE,filename="histogram") {
+
+    if ((length(fillcol) == 0 | length(groupcol) == 0)) {
+        p <- ggplot(data = df, aes_string(x = xcolumn)) +
+            geom_histogram(aes(y = ..density..), bins = nbins, color = "black", fill = "#1f77b4",show.legend = showlegend)
+
+    } else {
+        p <- ggplot(data = df, aes_string(x = xcolumn, group = groupcol, fill = fillcol)) +
+            geom_histogram(aes(y = ..density..), bins = nbins, color = "black",show.legend = showlegend)
+    }
+
+    ## Create the plot object
+    p <- p +
+        labs(title = plot_title,x = x_lab,y = y_lab) + 
+        theme_bw()
+    
+    ## Add density if needed
+    if (density == TRUE) {
+        p <- p + geom_density(alpha = 0.1, fill = "green")
+    }
+    
+    ## Add the customization if necessary
+    if (length(colvec) != 0 & length(legendlabels) != 0 & length(legendtitle) != 0) {
+        p <- p + scale_fill_manual(values = colvec,
+                      labels = legendlabels,
+                      name = legendtitle)
+    } else {
+        if (length(colvec) != 0) {
+            p <- p + scale_fill_manual(values = colvec)
+        }
+        if (length(legendlabels) != 0) {
+            p <- p + scale_fill_manual(labels = legendlabels)
+        }
+        if (length(legendtitle) != 0) {
+            p <- p + scale_fill_manual(name = legendtitle)
+        }
+    }
+    
+    ## Add median
+    if (addmedian == TRUE) {
+        p <- p + 
+            geom_vline(xintercept = median(df[[xcolumn]]), color = "forestgreen", size = 1)
+    }
+    
+    ## Add Mean
+    if (addmean ==  TRUE) {
+        p <- p + 
+            geom_vline(xintercept = mean(df[[xcolumn]]), color = "red", size = 1)
+    }
+    
+    if (save_img == TRUE) {
+        ggsave(filename = paste0(tolower(filename),"_", x_lab, ".png"), units = "cm", height = 15, width = 20)
+    }
+    
+    return(p)    
+}
+```
+
+#### 1.2.2 QQPlot
+
+```{r}
+## Foo for qqplotting
+plotqqplot <- function(df,var_name,prefix=FALSE,save_img=FALSE,plot_title) {
+    datos <- df[[var_name]]
+    p <- ggplot(df, aes(sample = datos)) + 
+          stat_qq(alpha = 0.5) + 
+          stat_qq_line(color = "red") + 
+          labs(title = plot_title, x = "Theorical", y = "Sample")    
+    
+    if (save_img == TRUE) {
+        if (prefix != FALSE) {
+            ggsave(filename = paste0(prefix,"_qqplot_",var_name,".png"),units = "cm",height = 20, width = 20)
+        } else {
+            ggsave(filename = paste0("qqplot_",var_name,".png"),units = "cm",height = 20, width = 20)
+        }        
+    }
+
+    return(p)
+}
+```
+
+#### 1.2.2 Plot PCA
+
+```{r}
+## Foo for PCA plotting
+plotpca <- function(princomps, explained_var, pca_a, pca_b, huefactor, title, colvec, legendlabs,elipse=FALSE,save_img=FALSE) {
+    expvar_pcaa <- explained_var[pca_a]
+    expvar_pcab <- explained_var[pca_b]
+
+    pca_data <- data.frame(pcaa = princomps[, pca_a], 
+                           pcab = princomps[, pca_b],
+                           hue = princomps[[huefactor]])
+
+    p <- ggplot(pca_data, aes(x = pcaa, y = pcab, color = factor(hue))) +
+      geom_point() +
+      scale_color_manual(values = colvec,
+                         labels = legendlabs,
+                         name = tools::toTitleCase(gsub("_", " ", huefactor))) +
+      theme_bw() +
+      labs(title = title,
+           x = paste0("PC", pca_a, " (", round(expvar_pcaa, 2), "% variance)"),
+           y = paste0("PC", pca_b, " (", round(expvar_pcab, 2), "% variance)"))
+    
+    if (elipse == TRUE) {
+        p <- p + stat_ellipse()
+    }
+    
+    if (save_img == TRUE) {
+        ggsave(filename = paste0("pca_", huefactor, ".png"), units = "cm", height = 15, width = 20)
+    }
+    
+    return(p)
+}
+```
+
+#### 1.2.3 Plot Barplot
+
+```{r}
+## To plot barplot
+plotbarplot <- function(df,columns,plot_title="Barplot",x_lab="Var1",y_lab="Freq",colvec=rainbow(n = 10),xlabels=NULL,legendlabels=NULL,legendtitle=NULL,group=FALSE,fillcol=NULL,factorcol=NULL,save_img=FALSE,filename="barplot") {
+    ## Exceptions
+    if (length(columns) >= 2 & (length(fillcol) == 0 | length(factorcol) == 0)) {
+        return("Missing fillcol arg. and/or factorcol arg.")
+
+    } else if (length(columns) == 1) {
+        fillcol <- columns[1]
+        factorcol <- columns[1]
+    }
+    
+    ## Create the table of counts
+    tbl_df <- df %>%
+        dplyr::group_by(!!!syms(columns)) %>%
+        summarise(Freq = n(), .groups = 'drop')
+    
+    tbl_df[[factorcol]] <- as.factor(tbl_df[[factorcol]])
+    
+    ## Create the plot object
+    p <- ggplot(tbl_df, aes(x = factor(tbl_df[[factorcol]]), y = Freq)) +
+        geom_bar(stat = "identity", aes_string(fill = fillcol)) +
+        labs(title = plot_title,x = x_lab,y = y_lab) + 
+        theme_bw()
+    
+    ## Add the customization if necessary
+    if (length(colvec) != 0 & length(legendlabels) != 0 & length(legendtitle) != 0 & length(xlabels) != 0) {
+        p <- p + scale_fill_manual(values = colvec,
+                      labels = legendlabels,
+                      name = legendtitle) +
+            scale_x_discrete(labels = xlabels)
+    } else {
+        if (length(colvec) != 0) {
+            p <- p + scale_fill_manual(values = colvec)
+        }
+        if (length(legendlabels) != 0) {
+            p <- p + scale_fill_manual(labels = legendlabels)
+        }
+        if (length(legendtitle) != 0) {
+            p <- p + scale_fill_manual(name = legendtitle)
+        }
+        if (length(xlabels) != 0) {
+            p <- p + scale_x_discrete(labels = xlabels)
+        }        
+    }
+    if (save_img == TRUE) {
+        ggsave(filename = paste0(tolower(filename),"_", x_lab, ".png"), units = "cm", height = 15, width = 20)
+    }   
+
+    
+    return(p)
+} 
+```
+
+#### 1.2.4 Plot Dispersion plot
+
+```{r}
+## Foo to plot dispersion plot
+plotdispersion <- function(df,xcolumn,ycolumn,x_lim=NA,y_lim=NA,plot_title="Dispersion",x_lab="Var1",y_lab="Freq",colvec=rainbow(n = 10),legendlabels=NULL,legendtitle=NULL,fillcol=NULL,showregression=FALSE,save_img=FALSE,filename="Dispersion") {
+    
+    if (length(fillcol) == 0) {
+        p <- ggplot(data = df, aes_string(x = xcolumn, y  = ycolumn)) +
+            geom_point(shape = 21, fill = "#1f77b4")
+
+    } else {
+        p <- ggplot(data = df, aes_string(x = xcolumn, y  = ycolumn)) +
+            geom_point(shape = 21, aes_string(fill = fillcol))
+    }
+    
+    p <- p +
+        xlim(NA,x_lim) +
+        ylim(NA,y_lim) +
+        labs(title = plot_title,x = x_lab,y = y_lab) + 
+        theme_bw()
+    
+    if (length(colvec) != 0 & length(legendlabels) != 0 & length(legendtitle) != 0) {
+        p <- p + scale_fill_manual(values = colvec,
+                      labels = legendlabels,
+                      name = legendtitle)
+    } else {
+        if (length(colvec) != 0) {
+            p <- p + scale_fill_manual(values = colvec)
+        }
+        if (length(legendlabels) != 0) {
+            p <- p + scale_fill_manual(labels = legendlabels)
+        }
+        if (length(legendtitle) != 0) {
+            p <- p + scale_fill_manual(name = legendtitle)
+        }
+    }
+    
+    if (showregression == TRUE) {
+        p <- p + geom_smooth(method = 'lm', aes(color = "red"), show.legend = FALSE)
+    }
+    
+    if (save_img == TRUE) {
+        ggsave(filename = paste0(tolower(filename),"_", xcolumn, ".png"), units = "cm", height = 15, width = 20)
+    }
+    
+    return(p)
+}
+```
+
+#### 1.2.5 Plot Boxplot
+
+```{r}
+plotboxplot <- function(df,xcolumn,ycolumn,fillcol,fwrapcol=NULL,fwraplabels=NULL,plot_title="Boxplot",x_lab="Var1",y_lab="Freq",colvec=rainbow(n = 10),legendlabels=NULL,legendtitle=NULL,xlabels=NULL,showpvalue=FALSE,comparisons=NULL,ylim=NA,save_img=FALSE,filename="boxplot") {
+    if (showpvalue == TRUE & length(comparisons) == 0) {
+        return("No comparisons provided.")
+    }
+    
+    p <- ggplot(data = df, aes_string(x = factor(df[[xcolumn]]), y = ycolumn, fill = factor(df[[fillcol]]))) +
+        geom_boxplot() +
+        coord_cartesian(ylim = c(NA,ylim)) +
+        labs(title = plot_title,x = x_lab,y = y_lab) + 
+        theme_bw()
+    
+    ## Define the facet wrap
+    if  (length(fwrapcol) != 0 & length(fwraplabels) != 0) {
+        ## creates the named vector by associating the values from fwrapcol (like 0 and 1) 
+        label_vector <- setNames(fwraplabels, unique(df[[fwrapcol]]))
+        p <- p + facet_wrap(as.formula(paste("~", fwrapcol)), labeller = labeller(.cols = as_labeller(label_vector)))
+    } else if (length(fwrapcol) != 0 & length(fwraplabels) == 0) {
+        p <- p + facet_wrap(~df[[fwrapcol]])
+    }
+    
+    if (length(xlabels) != 0) {
+        p <- p + scale_x_discrete(labels = xlabels)
+    }
+    
+    ## Check the labels
+    if (length(colvec) != 0 & length(legendlabels) != 0 & length(legendtitle) != 0) {
+        p <- p + scale_fill_manual(values = colvec,
+                      labels = legendlabels,
+                      name = legendtitle)
+    } else {
+        if (length(colvec) != 0) {
+            p <- p + scale_fill_manual(values = colvec)
+        }
+        if (length(legendlabels) != 0) {
+            p <- p + scale_fill_manual(labels = legendlabels)
+        }
+        if (length(legendtitle) != 0) {
+            p <- p + scale_fill_manual(name = legendtitle)
+        }
+    }
+    
+    ## Check if p value is shown
+    if (showpvalue == TRUE) {
+        p <- p + stat_compare_means(comparisons = comparisons, 
+                       label = "p.format", 
+                       method = "wilcox.test")#, 
+                       # label.y = max(df[[ycolumn]]) * 1.02)
+    }
+    
+    p <- p + theme(strip.background = element_blank(),
+          strip.text = element_text(size = 10))
+    
+    if (save_img == TRUE) {
+        ggsave(filename = paste0(tolower(filename),"_", x_lab, ".png"), units = "cm", height = 15, width = 20)
+    }
+    
+    return(p)
+}
+```
+
+#### 1.2.6 Remove Outliers
+
+```{r}
+## Foo for cleaning the ioutliers using the IQR
+removeoutliers <- function(df,col) {
+    q1 <- quantile(df[[col]],0.25)
+    q3 <- quantile(df[[col]],0.75)
+    
+    iqr <- q3 - q1
+    
+    lower <- q1 - (1.5*iqr)
+    upper <- q3 + (1.5*iqr)
+    
+    filtered_data <- df %>%
+        filter(.[col] >= lower & .[col] <= upper)
+    
+    return(filtered_data)
+}
+```
+
+#### 1.2.7 Check the best normalization
+
+```{r}
+## Foo for checking which is the best normalization method for a given dataset 
+checknormalization <- function(df,var_name) {
+    datos <- df[[var_name]]
+    print(var_name)
+    print(bestNormalize(datos))
+}
+```
+
+### 1.3 Load dataset
+
+```{r}
+## Read the dataset
+cvd_df <- read.csv(file = "C:/Users/chomb/Documents/Semestre 2025-1/Ciencia de Datos/Proyecto/data/cardiovascular_disease.csv")
+head(cvd_df)
+cvd_df_copy <- cvd_df
+
+cvd_df$gender <- as.factor(cvd_df$gender)
+cvd_df$cardio <- as.factor(cvd_df$cardio)
+cvd_df$cholesterol <- as.factor(cvd_df$cholesterol)
+cvd_df$gluc <- as.factor(cvd_df$gluc)
+```
+
+## 2. Data exploration
+
+Cholesterol levels by CVD
+
+```{r}
+p <- plotbarplot(df = cvd_df,
+                 columns = c("cholesterol","cardio"),
+                 fillcol = "cardio",
+                 factorcol = "cholesterol",
+                 plot_title = "Fig. 1 Cholesterol levels in CVD status",
+                 x_lab = "Cholesterol group",
+                 y_lab = "Frequency",
+                 colvec =  c("#0060ee", "#ee8e00"),
+                 legendlabels = c("Without CVD","With CVD"),
+                 legendtitle = "CVD Status",
+                 xlabels = c("Normal","Elevated","Hypertension"),
+                 save_img = TRUE,
+                 filename = "CholesterolByCVD")
+print(p)
+```
+
+Histogram of the height by gender
+
+```{r}
+p <- plothistogram(df = cvd_df,
+                   xcolumn = "height",
+                   groupcol = "gender",
+                   fillcol = "gender",
+                   density = FALSE,
+                   plot_title = "Fig. 2 Height distribution by gender",
+                   x_lab = "Height values",
+                   y_lab = "Frequency",
+                   colvec = c("#1f77b4", "#ff7f0e"),
+                   legendlabels = c("Female","Male"),
+                   legendtitle = "Gender",
+                   nbins = 100,
+                   addmean = FALSE,
+                   addmedian = FALSE,
+                   save_img = TRUE,
+                   filename = "HeightByGender")
+print(p)
+```
+
+Relation between Systolic pressure and Diastolic pressure colored by CVD
+
+```{r}
+p <- plotdispersion(df = cvd_df,
+                    xcolumn = "ap_hi",
+                    ycolumn = "ap_lo",
+                    fillcol = "cardio",
+                    x_lim = 250,
+                    y_lim = 250,
+                    plot_title = "Fig. 3 Systolic vs. Diastolic blood pressures by CVD status",
+                    x_lab = "Systolic pressure",
+                    y_lab = "Diastolic pressure",
+                    colvec = c("#0060ee", "#ee8e00"),
+                    legendtitle = "CVD status",
+                    legendlabels = c("Without CVD","With CVD"),
+                    showregression = TRUE,
+                    save_img = TRUE,
+                    filename = "DispersionBySystolicDiastolic")
+print(p)
+```
+
+Comparison of the influence of `$weight` in the CVD status depending on the smoking status.
+
+```{r}
+p <- plotboxplot(df = cvd_df,
+                 xcolumn = "cardio",
+                 ycolumn = "weight",
+                 fillcol = "cardio",
+                 plot_title = "Fig. 4 Weight and Smoking influence in patients with CVD",
+                 x_lab = NULL,
+                 y_lab = "Weight",
+                 fwrapcol = "smoke",
+                 fwraplabels = c("No Smoke", "Smoke"),
+                 colvec = c("#0060ee", "#ee8e00"),
+                 legendtitle = "CVD status",
+                 legendlabels = c("Without CVD","With CVD"),
+                 xlabels = c("Without CVD", "With CVD"),
+                 showpvalue = TRUE,
+                 comparisons = list(c("0", "1")),
+                 ylim = 220,
+                 save_img = TRUE,
+                 filename = "BoxplotBySmokeCVD")
+
+print(p)
+```
+
+## 2. Data Cleaning
+
+```{r}
+## Reassign the gender categorical values to 0,1
+cvd_df$gender <- recode(cvd_df$gender,
+                        '1' = 0,
+                        '2' = 1)
+
+## Create age groups by intervals of 10
+cvd_df$age_group <- findInterval(cvd_df$age_year, c(20, 30, 40, 50, 60, 70))
+```
+
+For the pressure there are some things that are for sure important to considerate:
+
+-   **Systolic pressure (ap_hi):**
+
+    -   Possible values:
+
+        -   \>= 70
+
+        -   \<= 300
+
+    -   Groups:
+
+        -   normal: 70 - 120
+
+        -   elevated: 120 - 130
+
+        -   hypertension: 130 - 300
+
+-   **Diastolic pressure (ap_lo)**
+
+    -   \>= 40
+
+    -   \<= 200
+
+-   It is impossible that:
+
+    -   diastolic pressure is higher than the systolic pressure
+
+    -   Negative values in any pressure
+
+    -   0 values
+
+```{r}
+## Clean pressures
+cvd_df <- cvd_df %>%
+    filter((ap_hi >= 70) & (ap_hi <= 300) & (ap_lo >= 40) & (ap_lo <= 200) & (ap_hi > ap_lo))
+
+## Create the blood pressure groups
+cvd_df$aphi_group <- findInterval(cvd_df$ap_hi, c(70,120,130,300))
+```
+
+There is something called the arterial blood pulse that is calculated by the next formula:
+
+$$
+\text{pulse} = \text{Systolic}_{\text{pressure}} - \text{Diastolic}_{\text{pressure}}
+$$
+
+and it can be categorized in the next groups (being 30 the lowest possible value):
+
+-   normal: 30 - 90
+
+-   elevated: 60- 80
+
+-   Pathological: 80 - 150
+
+```{r}
+## Add pulse
+cvd_df$pulse <- cvd_df$ap_hi - cvd_df$ap_lo
+cvd_df <- cvd_df[cvd_df$pulse >=30,]
+cvd_df$pulse_group <- findInterval(cvd_df$pulse, c(30,60,80,150))
+```
+
+Then remove the NA values from the dataset
+
+```{r}
+## Clean for NA's
+dim(cvd_df)
+cvd_df <- na.omit(cvd_df)
+dim(cvd_df)
+```
+
+Now, the outliers of the `$weight` and `$height` columns should be removed
+
+```{r}
+## Remove outliers
+pressure <- c("height","weight")
+df_cleaned <- as_tibble(cvd_df)
+for (i in pressure) {
+    df_cleaned <- removeoutliers(df = df_cleaned,col = i)
+}
+```
+
+Finally, create a new variable for the Body-Mass Index (BMI) which can be calculated with:
+
+$$
+\text{BMI} = \frac{\text{Weight}}{\text{Height}^2}
+$$
+
+```{r}
+df_cleaned$bmi <-df_cleaned$weight / ((df_cleaned$height/100)^2)
+
+## Visualize the output
+head(df_cleaned)
+dim(df_cleaned)
+```
+
+### 2.1 Visualization of the cleaned dataset
+
+in histograms:
+
+-   Red line = mean
+
+<!-- -->
+
+-   Green line = median
+
+```{r}
+## Visualizing cleaned df
+hist_names <- c("age_year","height","weight","ap_hi","ap_lo")
+i <- 5
+for (name in hist_names) {
+    p <- plothistogram(df = df_cleaned,
+                       xcolumn = name,
+                       density = TRUE,
+                       plot_title = paste("Fig.",i,name,"distribution"),
+                       x_lab = paste0(name," values"),
+                       y_lab = "Frequency",
+                       nbins = 100,
+                       addmean = TRUE,
+                       addmedian = TRUE,
+                       save_img = TRUE,
+                       filename = paste0("Histogram",name,"_cleaned"))
+    print(p)   
+    i <- i + 1
+    
+    q <- plotqqplot(df = df_cleaned,
+                    var_name = name,
+                    prefix = "cleaned",
+                    save_img = TRUE,
+                    plot_title = paste("Fig.",i,name,"QQplot"))
+    print(q)
+    i <- i + 1
+}
+```
+
+### 2.2 Modify the type of variables inside the dataset
+
+```{r}
+new_data <- df_cleaned
+# df_cleaned$ap_hi <- factor(df_cleaned$ap_hi)
+# df_cleaned$ap_lo <- factor(df_cleaned$ap_lo)
+# df_cleaned$cholesterol <- factor(df_cleaned$cholesterol)
+# df_cleaned$gluc <- factor(df_cleaned$gluc)
+# df_cleaned$smoke <- factor(df_cleaned$smoke)
+# df_cleaned$active <- factor(df_cleaned$active)
+# df_cleaned$cardio <- factor(df_cleaned$cardio)
+# df_cleaned$age_group <- factor(df_cleaned$age_group)
+# df_cleaned$aphi_group <- factor(df_cleaned$aphi_group)
+# df_cleaned$pulse_group <- factor(df_cleaned$pulse_group)
+```
+
+## 3. Normalization
+
+### 3.1 Check for the best normalization algorithms
+
+```{r}
+## Check the best normalization for the continuous columns that do not have a normal distribution
+norm_data <- c("age_year","height","weight","bmi")
+for (i in norm_data) {
+    checknormalization(df = df_cleaned,var_name = i)
+}
+```
+
+### 3.2 Normalize
+
+```{r}
+## Define arrays with the raw data for normalization
+raw_age <- df_cleaned$age_year
+raw_height <- df_cleaned$height
+raw_weight <- df_cleaned$weight
+raw_bmi <- df_cleaned$bmi
+
+## Check the skewness
+skewness(raw_age)
+skewness(raw_height)
+skewness(raw_weight)
+skewness(raw_bmi)
+
+## Make the corrections to the raw data
+raw_age <- max(raw_age + 1) - raw_age
+raw_weight <- max(raw_weight + 1) - raw_weight
+raw_bmi <- max(raw_bmi + 1) - raw_bmi
+
+## Start performing the normalizations
+## height normalization
+height_sqrtxobj <- sqrt_x(raw_height,standardize = TRUE)
+norm_height <- predict(height_sqrtxobj)
+
+## age normalization
+age_ordnorm <- orderNorm(raw_age,n_logit_fit = min(length(raw_age),10000),warn = TRUE)
+norm_age <- predict(age_ordnorm)
+
+## weight normalization
+weight_ordnorm <- orderNorm(raw_weight,n_logit_fit = min(length(raw_weight),10000),warn = TRUE)
+norm_weight <- predict(weight_ordnorm)
+
+## bmi normalization
+bmi_ordnorm <- orderNorm(raw_bmi,n_logit_fit = min(length(raw_bmi),10000),warn = TRUE)
+norm_bmi <- predict(bmi_ordnorm)
+
+## concatenate the norm. attributes
+df_norm <- df_cleaned
+df_norm$age_year <- norm_age
+df_norm$height <- norm_height
+df_norm$weight <- norm_weight
+df_norm$bmi <- norm_bmi
+
+head(df_norm)
+
+## Visualizing normalized attributes
+norm_data <- c("age_year","height","weight","bmi")
+i <- 15
+for (name in hist_names) {
+    p <- plothistogram(df = df_norm,
+                       xcolumn = name,
+                       density = TRUE,
+                       plot_title = paste("Fig.",i,name,"distribution"),
+                       x_lab = paste0(name," values"),
+                       y_lab = "Frequency",
+                       nbins = 100,
+                       addmean = TRUE,
+                       addmedian = TRUE,
+                       save_img = TRUE,
+                       filename = paste0("Histogram",name,"_norm"))
+    print(p)   
+    i <- i + 1
+    
+    q <- plotqqplot(df = df_norm,
+                    var_name = name,
+                    prefix = "norm",
+                    save_img = TRUE,
+                    plot_title = paste("Fig.",i,name,"QQplot"))
+    print(q)
+    i <- i + 1
+}
+```
+
+## 4. Dimensionality reduction
+
+Calculate the Principal Components of the dataset using the method `prcomp()` and plotting the different PC1 and PC2 with the different columns as hues.
+
+```{r}
+## Create the PCA object for the data
+i <- 9:18
+df_norm[, i] <- apply(df_norm[, i], 2, function(x) as.numeric(as.character(x)))
+pca_obj <- prcomp(df_norm[,-14], scale. = TRUE)
+pca_summ <- summary(pca_obj)
+pca_importance <- pca_summ$importance
+print(pca_importance)
+
+## Extract the percentages of the explained variance
+variance_exp <- apply(pca_obj$x,2,var)
+# variance_exp <- pca_obj$sdev^2
+per_explained <- (variance_exp/sum(variance_exp))*100
+
+## Extract the principal components and prepare for plotting
+princomps <- as.data.frame(pca_obj$x)
+princomps$gender <- df_norm$gender
+princomps$age_group <- df_norm$age_group
+princomps$aphi_group <- df_norm$aphi_group
+princomps$cholesterol <- df_norm$cholesterol
+princomps$glucose <- df_norm$gluc
+princomps$cardio <- df_norm$cardio
+princomps$bmi <- df_norm$bmi
+princomps$pulse_group <- df_norm$pulse_group
+
+## PCA for Age Groups
+p <- plotpca(princomps = princomps,
+        explained_var = per_explained,
+        pca_a = 1,
+        pca_b = 2,
+        huefactor = "age_group",
+        title = "Fig. 25 Age Group PCA",
+        colvec = c("#14083c", "#271f8c", "#5d57a9", "#938fc6", "#c9c7e2"),
+        legendlabs = c("20-30", "30-40", "40-50", "50-60", "60-70"),
+        save_img = TRUE)
+
+print(p)
+
+## PCA for Gender
+p <- plotpca(princomps = princomps,
+        explained_var = per_explained,
+        pca_a = 1,
+        pca_b = 2,
+        huefactor = "gender",
+        title = "Fig. 26 Gender PCA",
+        colvec = c("#0060ee", "#ee8e00"),
+        legendlabs = c("Female","Male"),
+        save_img = TRUE)
+
+print(p)
+
+## PCA for Blood pressure
+p <- plotpca(princomps = princomps,
+        explained_var = per_explained,
+        pca_a = 1,
+        pca_b = 2,
+        huefactor = "aphi_group",
+        title = "Fig. 27 Blood Pressure PCA",
+        colvec = c("#581845", "#FF5733", "#DAF7A6"),
+        legendlabs = c("Normal","Elevated","Hypertension"),
+        save_img = TRUE)
+
+print(p)
+
+## PCA for Cholesterol
+p <- plotpca(princomps = princomps,
+        explained_var = per_explained,
+        pca_a = 1,
+        pca_b = 2,
+        huefactor = "cholesterol",
+        title = "Fig. 28 Cholesterol PCA",
+        colvec = c("#581845", "#FF5733", "#DAF7A6"),
+        legendlabs = c("Normal","Above Normal","Well Above Normal"),
+        save_img = TRUE)
+
+print(p)
+
+## PCA for Glucose
+p <- plotpca(princomps = princomps,
+        explained_var = per_explained,
+        pca_a = 1,
+        pca_b = 2,
+        huefactor = "glucose",
+        title = "Fig. 29 Glucose PCA",
+        colvec = c("#581845", "#FF5733", "#DAF7A6"),
+        legendlabs = c("Normal","Above Normal","Well Above Normal"),
+        save_img = TRUE)
+
+print(p)
+
+## PCA for Pulse
+p <- plotpca(princomps = princomps,
+        explained_var = per_explained,
+        pca_a = 1,
+        pca_b = 2,
+        huefactor = "pulse_group",
+        title = "Fig. 30 Pulse PCA",
+        colvec = c("#581845", "#FF5733", "#DAF7A6"),
+        legendlabs = c("Normal","Elevated","Pathological"),
+        save_img = TRUE)
+
+print(p)
+
+## PCA for Cardio
+p <- plotpca(princomps = princomps,
+        explained_var = per_explained,
+        pca_a = 1,
+        pca_b = 2,
+        huefactor = "cardio",
+        title = "Fig. 31 Cardiovascular Disease PCA",
+        colvec = c("#0060ee", "#ee8e00"),
+        legendlabs = c("True","False"),
+        save_img = TRUE)
+
+print(p)
+```
+
+After analyzing the data, we realized that the normalization was not necessary for building a model. Instead, we scaled the data prior the model creation.
+
+## 4. Statistical Inference: Multiple Linear Regression
+
+Multiple Linear Regression for the all the columns to get the significance of each column.
+
+```{r}
+i <- 9:19
+df_cleaned[, i] <- apply(df_cleaned[, i], 2, function(x) as.numeric(as.character(x)))
+multiple_model <- glm(data = df_cleaned, cardio ~ age_year +
+                        gender +
+                        height +
+                        weight +
+                        ap_hi +
+                        ap_lo +
+                        cholesterol +
+                        gluc +
+                        smoke +
+                        alco +
+                        active +
+                        age_group +
+                        aphi_group +
+                        pulse +
+                        pulse_group +
+                        bmi
+                      )
+summary(multiple_model)
+```
+
+All of the columns seem to be significant, except `$gender`,`$pulse`,`$bmi`
+
+### 4.1 Visualizing the Most significant columns
+
+```{r}
+## Plot systolic pressure by cardio and cholesterol in the logistic regression
+ggplot(df_cleaned, aes(x = ap_hi, y = cardio, color = cholesterol)) +
+  stat_smooth(method = glm, se = FALSE, method.args = list(family = binomial)) +  
+  geom_point(alpha=0.5) +
+    labs(title = "Fig. 32 Cardio vs. Systolic pressure in Logistic Model")
+
+ggsave(filename = "GLMModel_CardioVsSystolic.png",height = 15,width = 20,units = "cm")
+```
+
+### 4.2 R\^2 of the model
+
+```{r}
+chi <- multiple_model$null.deviance - multiple_model$deviance
+chi / multiple_model$null.deviance 
+```
+
+### 4.3 Visualizing the residuals
+
+```{r}
+df_model <- df_cleaned
+df_model$log_residuals <- multiple_model$residuals
+
+# Ploteamos dispercion
+ggplot(df_model, aes(x = id, y = log_residuals)) + 
+  geom_point() +
+  labs(title = "Fig. 33 Residuals dispersion", x = "Índice", y = "Residuales")
+ggsave(filename = "GLMModel_residualsDispersion.png",height = 15,width = 20,units = "cm")
+
+# Ploteamos histograma
+ggplot(df_model, aes(x = log_residuals)) + 
+  geom_histogram(color = "black", fill = "white") + 
+  labs(title = "Fig. 34 Residuals histogram", x = "Valor", y = "Frecuencia")
+ggsave(filename = "GLMModel_residualsBarplots.png",height = 15,width = 20,units = "cm")
+
+# Prueba de normalidad
+ks.test(df_model$log_residuals, pnorm, mean(df_model$log_residuals), sd(df_model$log_residuals))
+```
+
+### 4.4 Prediction of the model
+
+```{r}
+df_model$predicted_cvd <- predict(
+  multiple_model, 
+  newdata = df_model[, c("age_year", "gender", "height", "weight", 
+                         "ap_hi", "ap_lo", "cholesterol", "gluc", 
+                         "smoke", "alco", "active", "age_group", 
+                         "aphi_group", "pulse", "pulse_group", "bmi")], 
+  type = 'response'
+)
+
+head(df_model[, c("cardio", "predicted_cvd")])
+
+```
+
+```{r}
+## Visualize it
+ggplot(df_model, aes(x = ap_hi, y = predicted_cvd, color = factor(cardio))) +
+  geom_point() +  # agregamos los puntos de las observaciones en color rojo
+  labs(title = "Fig. 35 Logistic model using Systolic pressure", subtitle = 'Predicted probability', x = "Systolic pressure", y = "P(CVD)", color = "Diagnosed CVD")
+ggsave(filename = "GLMModel_PredictedProb.png",height = 15,width = 20,units = "cm")
+
+```
