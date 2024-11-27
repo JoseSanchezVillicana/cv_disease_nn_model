@@ -37,8 +37,6 @@ knitr:
 
 # Procesamiento del dataset "Cardiovascular Disease"
 
-This Notebook aims to explain all the steps done by us for cleaning and transforming the data from the `cardiovascular_disease.csv` file. This dataset consists of 70,000 patient data points. Below is the information for each attribute:
-
 1.  **Age** \| Objective Feature \| `age` \| *int (days)*
 2.  **Height** \| Objective Feature \| `height` \| *int (cm)*
 3.  **Weight** \| Objective Feature \| `weight` \| *float (kg)*
@@ -628,9 +626,6 @@ dim(df_cleaned)
 in histograms:
 
 -   Red line = mean
-
-<!-- -->
-
 -   Green line = median
 
 ```{r}
@@ -894,7 +889,8 @@ Multiple Linear Regression for the all the columns to get the significance of ea
 ```{r}
 i <- 9:19
 df_cleaned[, i] <- apply(df_cleaned[, i], 2, function(x) as.numeric(as.character(x)))
-multiple_model <- glm(data = df_cleaned, cardio ~ age_year +
+df_norm[, i] <- apply(df_norm[, i], 2, function(x) as.numeric(as.character(x)))
+multiple_model <- glm(data = df_norm, cardio ~ age_year +
                         gender +
                         height +
                         weight +
@@ -914,13 +910,13 @@ multiple_model <- glm(data = df_cleaned, cardio ~ age_year +
 summary(multiple_model)
 ```
 
-All of the columns seem to be significant, except `$gender`,`$pulse`,`$bmi`
+All of the columns seem to be significant, except `$gender`,`$pulse`,`$bmi`,`$height`,`$weight`
 
 ### 4.1 Visualizing the Most significant columns
 
 ```{r}
 ## Plot systolic pressure by cardio and cholesterol in the logistic regression
-ggplot(df_cleaned, aes(x = ap_hi, y = cardio, color = cholesterol)) +
+ggplot(df_norm, aes(x = ap_hi, y = cardio, color = cholesterol)) +
   stat_smooth(method = glm, se = FALSE, method.args = list(family = binomial)) +  
   geom_point(alpha=0.5) +
     labs(title = "Fig. 32 Cardio vs. Systolic pressure in Logistic Model")
@@ -938,7 +934,7 @@ chi / multiple_model$null.deviance
 ### 4.3 Visualizing the residuals
 
 ```{r}
-df_model <- df_cleaned
+df_model <- df_norm
 df_model$log_residuals <- multiple_model$residuals
 
 # Ploteamos dispercion
@@ -978,6 +974,12 @@ head(df_model[, c("cardio", "predicted_cvd")])
 ggplot(df_model, aes(x = ap_hi, y = predicted_cvd, color = factor(cardio))) +
   geom_point() +  # agregamos los puntos de las observaciones en color rojo
   labs(title = "Fig. 35 Logistic model using Systolic pressure", subtitle = 'Predicted probability', x = "Systolic pressure", y = "P(CVD)", color = "Diagnosed CVD")
-ggsave(filename = "GLMModel_PredictedProb.png",height = 15,width = 20,units = "cm")
+ggsave(filename = "GLMModel_predicted.png",height = 15,width = 20,units = "cm")
 
+```
+
+## Reproducibility
+
+```{r}
+sessioninfo::session_info()
 ```
