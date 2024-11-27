@@ -52,5 +52,5 @@ Como punto final, es importante destacar que otros modelos de aprendizaje, con p
 Se puede encontrar la parte del procesamiento y la creación de la red neuronal
 en las siguientes ligas:
 
-- [Procesamiento](https://github.com/JoseSanchezVillicana/cv_disease_nn_model/tree/master/docs/Processing.html)
+- [Procesamiento](https://github.com/JoseSanchezVillicana/cv_disease_nn_model/tree/master/bin/Processing.qmd)
 - [DNN](https://github.com/JoseSanchezVillicana/cv_disease_nn_model/blob/master/bin/classification.ipynb)
